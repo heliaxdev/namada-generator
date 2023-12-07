@@ -6,6 +6,7 @@ use namada_sdk::core::ledger::governance::storage::proposal::{
 use namada_sdk::core::ledger::governance::storage::vote::{StorageProposalVote, VoteType};
 use namada_sdk::core::proto::{Code, Commitment, Header, Section, Tx};
 use namada_sdk::core::types::address::testing::arb_address;
+use namada_sdk::core::types::address::Address;
 use namada_sdk::core::types::chain::ChainId;
 use namada_sdk::core::types::dec::Dec;
 use namada_sdk::core::types::hash;
@@ -19,7 +20,7 @@ use namada_sdk::core::types::token::{DenominatedAmount, Denomination};
 use namada_sdk::core::types::transaction::account::{InitAccount, UpdateAccount};
 use namada_sdk::core::types::transaction::governance::{InitProposalData, VoteProposalData};
 use namada_sdk::core::types::transaction::pos::{
-    Bond, CommissionChange, ConsensusKeyChange, InitValidator, MetaDataChange, Withdraw,
+    Bond, CommissionChange, ConsensusKeyChange, InitValidator, MetaDataChange, Unbond, Withdraw,
 };
 use namada_sdk::core::types::transaction::{DecryptedTx, Fee, GasLimit, TxType, WrapperTx};
 use namada_sdk::core::types::uint::{Uint, I256};
@@ -41,6 +42,29 @@ use proptest::strategy::ValueTree;
 use proptest::test_runner::Reason;
 use proptest::test_runner::TestRunner;
 use std::path::PathBuf;
+
+#[derive(Debug)]
+// To facilitate propagating debugging information
+pub enum TxData {
+    CommissionChange(CommissionChange),
+    ConsensusKeyChange(ConsensusKeyChange),
+    MetaDataChange(MetaDataChange),
+    ClaimRewards(Withdraw),
+    DeactivateValidator(Address),
+    InitAccount(InitAccount),
+    InitProposal(InitProposalData),
+    InitValidator(InitValidator),
+    ReactivateValidator(Address),
+    RevealPk(common::PublicKey),
+    Unbond(Unbond),
+    UnjailValidator(Address),
+    UpdateAccount(UpdateAccount),
+    VoteProposal(VoteProposalData),
+    Withdraw(Withdraw),
+    Transfer(Transfer),
+    Bond(Bond),
+    Custom(Box<dyn std::fmt::Debug>),
+}
 
 prop_compose! {
     // Generate an arbitrary denomination
@@ -516,12 +540,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         transfer in arb_transfer(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(transfer);
+        tx.add_data(transfer.clone());
         tx.add_code_from_hash(code_hash, Some(TX_TRANSFER_WASM.to_owned()));
-        tx
+        (tx, TxData::Transfer(transfer))
     }
 }
 
@@ -532,12 +556,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         bond in arb_bond(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(bond);
+        tx.add_data(bond.clone());
         tx.add_code_from_hash(code_hash, Some(TX_BOND_WASM.to_owned()));
-        tx
+        (tx, TxData::Bond(bond))
     }
 }
 
@@ -546,14 +570,14 @@ prop_compose! {
     pub fn arb_unbond_tx()(
         mut header in arb_header(),
         wrapper in arb_wrapper_tx(),
-        bond in arb_bond(),
+        unbond in arb_bond(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(bond);
+        tx.add_data(unbond.clone());
         tx.add_code_from_hash(code_hash, Some(TX_UNBOND_WASM.to_owned()));
-        tx
+        (tx, TxData::Unbond(unbond))
     }
 }
 
@@ -565,14 +589,14 @@ prop_compose! {
         mut init_account in arb_init_account(),
         extra_data in arb_code(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
         let vp_code_hash = tx.add_section(Section::ExtraData(extra_data)).get_hash();
         init_account.vp_code_hash = vp_code_hash;
-        tx.add_data(init_account);
+        tx.add_data(init_account.clone());
         tx.add_code_from_hash(code_hash, Some(TX_INIT_ACCOUNT_WASM.to_owned()));
-        tx
+        (tx, TxData::InitAccount(init_account))
     }
 }
 
@@ -584,14 +608,14 @@ prop_compose! {
         mut init_validator in arb_init_validator(),
         extra_data in arb_code(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
         let vp_code_hash = tx.add_section(Section::ExtraData(extra_data)).get_hash();
         init_validator.validator_vp_code_hash = vp_code_hash;
-        tx.add_data(init_validator);
+        tx.add_data(init_validator.clone());
         tx.add_code_from_hash(code_hash, Some(TX_INIT_VALIDATOR_WASM.to_owned()));
-        tx
+        (tx, TxData::InitValidator(init_validator))
     }
 }
 
@@ -604,7 +628,7 @@ prop_compose! {
         content_extra_data in arb_code(),
         type_extra_data in arb_code(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
         let content_hash = tx.add_section(Section::ExtraData(content_extra_data)).get_hash();
@@ -613,9 +637,9 @@ prop_compose! {
             let type_hash = tx.add_section(Section::ExtraData(type_extra_data)).get_hash();
             *hash = type_hash;
         }
-        tx.add_data(init_proposal);
+        tx.add_data(init_proposal.clone());
         tx.add_code_from_hash(code_hash, Some(TX_INIT_PROPOSAL.to_owned()));
-        tx
+        (tx, TxData::InitProposal(init_proposal))
     }
 }
 
@@ -626,12 +650,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         vote_proposal in arb_vote_proposal(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(vote_proposal);
+        tx.add_data(vote_proposal.clone());
         tx.add_code_from_hash(code_hash, Some(TX_VOTE_PROPOSAL.to_owned()));
-        tx
+        (tx, TxData::VoteProposal(vote_proposal))
     }
 }
 
@@ -642,12 +666,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         pk in arb_common_pk(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(pk);
+        tx.add_data(pk.clone());
         tx.add_code_from_hash(code_hash, Some(TX_REVEAL_PK.to_owned()));
-        tx
+        (tx, TxData::RevealPk(pk))
     }
 }
 
@@ -659,16 +683,16 @@ prop_compose! {
         mut update_account in arb_update_account(),
         extra_data in arb_code(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
         if let Some(vp_code_hash) = &mut update_account.vp_code_hash {
             let new_code_hash = tx.add_section(Section::ExtraData(extra_data)).get_hash();
             *vp_code_hash = new_code_hash;
         }
-        tx.add_data(update_account);
+        tx.add_data(update_account.clone());
         tx.add_code_from_hash(code_hash, Some(TX_UPDATE_ACCOUNT_WASM.to_owned()));
-        tx
+        (tx, TxData::UpdateAccount(update_account))
     }
 }
 
@@ -679,12 +703,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         withdraw in arb_withdraw(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(withdraw);
+        tx.add_data(withdraw.clone());
         tx.add_code_from_hash(code_hash, Some(TX_WITHDRAW_WASM.to_owned()));
-        tx
+        (tx, TxData::Withdraw(withdraw))
     }
 }
 
@@ -695,12 +719,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         claim_rewards in arb_withdraw(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(claim_rewards);
+        tx.add_data(claim_rewards.clone());
         tx.add_code_from_hash(code_hash, Some(TX_CLAIM_REWARDS_WASM.to_owned()));
-        tx
+        (tx, TxData::ClaimRewards(claim_rewards))
     }
 }
 
@@ -711,12 +735,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         commission_change in arb_commission_change(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(commission_change);
+        tx.add_data(commission_change.clone());
         tx.add_code_from_hash(code_hash, Some(TX_CHANGE_COMMISSION_WASM.to_owned()));
-        tx
+        (tx, TxData::CommissionChange(commission_change))
     }
 }
 
@@ -727,12 +751,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         metadata_change in arb_metadata_change(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(metadata_change);
+        tx.add_data(metadata_change.clone());
         tx.add_code_from_hash(code_hash, Some(TX_CHANGE_METADATA_WASM.to_owned()));
-        tx
+        (tx, TxData::MetaDataChange(metadata_change))
     }
 }
 
@@ -743,12 +767,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         address in arb_address(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(address);
+        tx.add_data(address.clone());
         tx.add_code_from_hash(code_hash, Some(TX_UNJAIL_VALIDATOR_WASM.to_owned()));
-        tx
+        (tx, TxData::UnjailValidator(address))
     }
 }
 
@@ -759,12 +783,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         address in arb_address(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(address);
+        tx.add_data(address.clone());
         tx.add_code_from_hash(code_hash, Some(TX_DEACTIVATE_VALIDATOR_WASM.to_owned()));
-        tx
+        (tx, TxData::DeactivateValidator(address))
     }
 }
 
@@ -775,12 +799,12 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         address in arb_address(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(address);
+        tx.add_data(address.clone());
         tx.add_code_from_hash(code_hash, Some(TX_REACTIVATE_VALIDATOR_WASM.to_owned()));
-        tx
+        (tx, TxData::ReactivateValidator(address))
     }
 }
 
@@ -791,17 +815,17 @@ prop_compose! {
         wrapper in arb_wrapper_tx(),
         consensus_key_change in arb_consensus_key_change(),
         code_hash in arb_hash(),
-    ) -> Tx {
+    ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        tx.add_data(consensus_key_change);
+        tx.add_data(consensus_key_change.clone());
         tx.add_code_from_hash(code_hash, Some(TX_CHANGE_CONSENSUS_KEY_WASM.to_owned()));
-        tx
+        (tx, TxData::ConsensusKeyChange(consensus_key_change))
     }
 }
 
 // Generate an arbitrary tx
-pub fn arb_tx() -> impl Strategy<Value = Tx> {
+pub fn arb_tx() -> impl Strategy<Value = (Tx, TxData)> {
     arb_transfer_tx()
         .boxed()
         .prop_union(arb_bond_tx().boxed())
@@ -826,16 +850,16 @@ pub fn arb_tx() -> impl Strategy<Value = Tx> {
 async fn main() -> Result<(), Reason> {
     let mut runner = TestRunner::default();
     let wallet = FsWalletUtils::new(PathBuf::from("wallet.toml"));
-    let mut txs = vec![];
+    let mut debug_vectors = vec![];
     let mut test_vectors = vec![];
     for i in 0..1000 {
-        let tree = arb_tx().new_tree(&mut runner)?;
-        let mut ledger_vector = to_ledger_vector(&wallet, &tree.current())
+        let (tx, tx_data) = arb_tx().new_tree(&mut runner)?.current();
+        let mut ledger_vector = to_ledger_vector(&wallet, &tx)
             .await
             .expect("unable to construct test vector");
         ledger_vector.name = format!("{}_{}", i, ledger_vector.name);
-        test_vectors.push(ledger_vector);
-        txs.push(tree.current());
+        test_vectors.push(ledger_vector.clone());
+        debug_vectors.push((ledger_vector, tx, tx_data));
     }
     let args: Vec<_> = std::env::args().collect();
     if args.len() < 3 {
@@ -844,6 +868,6 @@ async fn main() -> Result<(), Reason> {
     }
     let json = serde_json::to_string(&test_vectors).expect("unable to serialize test vectors");
     std::fs::write(&args[1], json).expect("unable to save test vectors");
-    std::fs::write(&args[2], format!("{:?}", txs)).expect("unable to save test vectors");
+    std::fs::write(&args[2], format!("{:?}", debug_vectors)).expect("unable to save test vectors");
     Ok(())
 }

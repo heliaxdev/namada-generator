@@ -2937,7 +2937,7 @@ dependencies = [
 [[package]]
 name = "namada_core"
 version = "0.27.0"
-source = "git+https://github.com/anoma/namada.git?branch=murisi/denominated-fee-amount#a9ff48e72d5cec1a85c5a3a3c27b77cbcb31d8fb"
+source = "git+https://github.com/anoma/namada.git?branch=murisi/denominated-fee-amount#8b28d2798d088e794d4ea6491bc9e1223cae8f7f"
 dependencies = [
  "ark-bls12-381",
  "ark-serialize",
@@ -2989,7 +2989,7 @@ dependencies = [
 [[package]]
 name = "namada_ethereum_bridge"
 version = "0.27.0"
-source = "git+https://github.com/anoma/namada.git?branch=murisi/denominated-fee-amount#a9ff48e72d5cec1a85c5a3a3c27b77cbcb31d8fb"
+source = "git+https://github.com/anoma/namada.git?branch=murisi/denominated-fee-amount#8b28d2798d088e794d4ea6491bc9e1223cae8f7f"
 dependencies = [
  "borsh",
  "borsh-ext",
@@ -3011,7 +3011,7 @@ dependencies = [
 [[package]]
 name = "namada_macros"
 version = "0.27.0"
-source = "git+https://github.com/anoma/namada.git?branch=murisi/denominated-fee-amount#a9ff48e72d5cec1a85c5a3a3c27b77cbcb31d8fb"
+source = "git+https://github.com/anoma/namada.git?branch=murisi/denominated-fee-amount#8b28d2798d088e794d4ea6491bc9e1223cae8f7f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3021,7 +3021,7 @@ dependencies = [
 [[package]]
 name = "namada_proof_of_stake"
 version = "0.27.0"
-source = "git+https://github.com/anoma/namada.git?branch=murisi/denominated-fee-amount#a9ff48e72d5cec1a85c5a3a3c27b77cbcb31d8fb"
+source = "git+https://github.com/anoma/namada.git?branch=murisi/denominated-fee-amount#8b28d2798d088e794d4ea6491bc9e1223cae8f7f"
 dependencies = [
  "borsh",
  "data-encoding",
@@ -3036,7 +3036,7 @@ dependencies = [
 [[package]]
 name = "namada_sdk"
 version = "0.27.0"
-source = "git+https://github.com/anoma/namada.git?branch=murisi/denominated-fee-amount#a9ff48e72d5cec1a85c5a3a3c27b77cbcb31d8fb"
+source = "git+https://github.com/anoma/namada.git?branch=murisi/denominated-fee-amount#8b28d2798d088e794d4ea6491bc9e1223cae8f7f"
 dependencies = [
  "async-trait",
  "bimap",
