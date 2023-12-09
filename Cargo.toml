@@ -7,13 +7,13 @@ edition = "2021"
 
 [dependencies]
 async-std = "1.11.0"
-borsh-derive = { version = "=1.0.0-alpha.4" }
 chrono = {version = "0.4.22", default-features = false, features = ["clock", "std"]}
 futures = "0.3.28"
 getrandom = { version = "0.2" }
 ibc = { version = "0.47.0", default-features = false, features = ["serde"]}
 ibc-proto = {version = "0.37.1", default-features = false}
-namada_sdk = { git = "https://github.com/anoma/namada.git", branch = "murisi/denominated-fee-amount", default-features = false, features = ["namada-sdk", "std", "testing"] }
+masp_proofs = { git = "https://github.com/anoma/masp", tag = "v1.0.0", default-features = false, features = ["local-prover", "download-params"] }
+namada_sdk = { git = "https://github.com/anoma/namada.git", branch = "murisi/draft-with-denominated-fee-amount-on-0.28.0", default-features = false, features = ["namada-sdk", "std", "testing"] }
 proptest = "1.2.0"
 prost = "0.12.0"
 rand = {version = "0.8", default-features = false}

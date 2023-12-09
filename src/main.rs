@@ -41,7 +41,7 @@ use namada_sdk::core::types::transaction::account::{InitAccount, UpdateAccount};
 use namada_sdk::core::types::transaction::governance::{InitProposalData, VoteProposalData};
 use namada_sdk::core::types::transaction::pgf::UpdateStewardCommission;
 use namada_sdk::core::types::transaction::pos::{
-    Bond, CommissionChange, ConsensusKeyChange, InitValidator, MetaDataChange, Redelegation,
+    BecomeValidator, Bond, CommissionChange, ConsensusKeyChange, MetaDataChange, Redelegation,
     Unbond, Withdraw,
 };
 use namada_sdk::core::types::transaction::{DecryptedTx, Fee, GasLimit, TxType, WrapperTx};
@@ -50,11 +50,12 @@ use namada_sdk::signing::to_ledger_vector;
 use namada_sdk::tx::TX_BOND_WASM;
 use namada_sdk::tx::TX_TRANSFER_WASM;
 use namada_sdk::tx::{
-    TX_BRIDGE_POOL_WASM, TX_CHANGE_COMMISSION_WASM, TX_CHANGE_CONSENSUS_KEY_WASM,
-    TX_CHANGE_METADATA_WASM, TX_CLAIM_REWARDS_WASM, TX_DEACTIVATE_VALIDATOR_WASM, TX_IBC_WASM,
-    TX_INIT_ACCOUNT_WASM, TX_INIT_PROPOSAL, TX_INIT_VALIDATOR_WASM, TX_REACTIVATE_VALIDATOR_WASM,
-    TX_REDELEGATE_WASM, TX_RESIGN_STEWARD, TX_REVEAL_PK, TX_UNBOND_WASM, TX_UNJAIL_VALIDATOR_WASM,
-    TX_UPDATE_ACCOUNT_WASM, TX_UPDATE_STEWARD_COMMISSION, TX_VOTE_PROPOSAL, TX_WITHDRAW_WASM,
+    TX_BECOME_VALIDATOR_WASM, TX_BRIDGE_POOL_WASM, TX_CHANGE_COMMISSION_WASM,
+    TX_CHANGE_CONSENSUS_KEY_WASM, TX_CHANGE_METADATA_WASM, TX_CLAIM_REWARDS_WASM,
+    TX_DEACTIVATE_VALIDATOR_WASM, TX_IBC_WASM, TX_INIT_ACCOUNT_WASM, TX_INIT_PROPOSAL,
+    TX_REACTIVATE_VALIDATOR_WASM, TX_REDELEGATE_WASM, TX_RESIGN_STEWARD, TX_REVEAL_PK,
+    TX_UNBOND_WASM, TX_UNJAIL_VALIDATOR_WASM, TX_UPDATE_ACCOUNT_WASM, TX_UPDATE_STEWARD_COMMISSION,
+    TX_VOTE_PROPOSAL, TX_WITHDRAW_WASM,
 };
 use namada_sdk::wallet::fs::FsWalletUtils;
 use proptest::collection;
@@ -79,7 +80,7 @@ pub enum TxData {
     DeactivateValidator(Address),
     InitAccount(InitAccount),
     InitProposal(InitProposalData),
-    InitValidator(InitValidator),
+    InitValidator(BecomeValidator),
     ReactivateValidator(Address),
     RevealPk(common::PublicKey),
     Unbond(Unbond),
@@ -377,11 +378,8 @@ prop_compose! {
 
 prop_compose! {
     // Generate a validator initialization
-    pub fn arb_init_validator()(
-        account_keys in collection::vec(arb_common_pk(), 0..10),
-    )(
-        threshold in 0..=account_keys.len() as u8,
-        account_keys in Just(account_keys),
+    pub fn arb_become_validator()(
+        address in arb_address(),
         consensus_key in arb_common_pk(),
         eth_cold_key in arb_pk::<secp256k1::SigScheme>(),
         eth_hot_key in arb_pk::<secp256k1::SigScheme>(),
@@ -392,11 +390,9 @@ prop_compose! {
         description in option::of("[a-zA-Z0-9_]*"),
         website in option::of("[a-zA-Z0-9_]*"),
         discord_handle in option::of("[a-zA-Z0-9_]*"),
-        validator_vp_code_hash in arb_hash(),
-    ) -> InitValidator {
-        InitValidator {
-            account_keys,
-            threshold,
+    ) -> BecomeValidator {
+        BecomeValidator {
+            address,
             consensus_key,
             eth_cold_key,
             eth_hot_key,
@@ -407,7 +403,6 @@ prop_compose! {
             description,
             website,
             discord_handle,
-            validator_vp_code_hash,
         }
     }
 }
@@ -884,20 +879,17 @@ prop_compose! {
 
 prop_compose! {
     // Generate an arbitrary account initialization transaction
-    pub fn arb_init_validator_tx()(
+    pub fn arb_become_validator_tx()(
         mut header in arb_header(),
         wrapper in arb_wrapper_tx(),
-        mut init_validator in arb_init_validator(),
-        extra_data in arb_code(),
+        become_validator in arb_become_validator(),
         code_hash in arb_hash(),
     ) -> (Tx, TxData) {
         header.tx_type = TxType::Wrapper(Box::new(wrapper));
         let mut tx = Tx { header, sections: vec![] };
-        let vp_code_hash = tx.add_section(Section::ExtraData(extra_data)).get_hash();
-        init_validator.validator_vp_code_hash = vp_code_hash;
-        tx.add_data(init_validator.clone());
-        tx.add_code_from_hash(code_hash, Some(TX_INIT_VALIDATOR_WASM.to_owned()));
-        (tx, TxData::InitValidator(init_validator))
+        tx.add_data(become_validator.clone());
+        tx.add_code_from_hash(code_hash, Some(TX_BECOME_VALIDATOR_WASM.to_owned()));
+        (tx, TxData::InitValidator(become_validator))
     }
 }
 
@@ -1195,7 +1187,7 @@ pub fn arb_tx() -> impl Strategy<Value = (Tx, TxData)> {
         .prop_union(arb_bond_tx().boxed())
         .or(arb_unbond_tx().boxed())
         .or(arb_init_account_tx().boxed())
-        .or(arb_init_validator_tx().boxed())
+        .or(arb_become_validator_tx().boxed())
         .or(arb_init_proposal_tx().boxed())
         .or(arb_vote_proposal_tx().boxed())
         .or(arb_reveal_pk_tx().boxed())
