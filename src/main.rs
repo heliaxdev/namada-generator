@@ -9,6 +9,10 @@ use namada_sdk::core::types::address::testing::arb_address;
 use namada_sdk::core::types::address::Address;
 use namada_sdk::core::types::chain::ChainId;
 use namada_sdk::core::types::dec::Dec;
+use namada_sdk::core::types::eth_bridge_pool::{
+    GasFee, PendingTransfer, TransferToEthereum, TransferToEthereumKind,
+};
+use namada_sdk::core::types::ethereum_events::EthAddress;
 use namada_sdk::core::types::hash;
 use namada_sdk::core::types::key::testing::arb_keypair;
 use namada_sdk::core::types::key::{common, ed25519, secp256k1, RefTo, SecretKey, SigScheme};
@@ -19,8 +23,10 @@ use namada_sdk::core::types::token::Transfer;
 use namada_sdk::core::types::token::{DenominatedAmount, Denomination};
 use namada_sdk::core::types::transaction::account::{InitAccount, UpdateAccount};
 use namada_sdk::core::types::transaction::governance::{InitProposalData, VoteProposalData};
+use namada_sdk::core::types::transaction::pgf::UpdateStewardCommission;
 use namada_sdk::core::types::transaction::pos::{
-    Bond, CommissionChange, ConsensusKeyChange, InitValidator, MetaDataChange, Unbond, Withdraw,
+    Bond, CommissionChange, ConsensusKeyChange, InitValidator, MetaDataChange, Redelegation,
+    Unbond, Withdraw,
 };
 use namada_sdk::core::types::transaction::{DecryptedTx, Fee, GasLimit, TxType, WrapperTx};
 use namada_sdk::core::types::uint::{Uint, I256};
@@ -28,10 +34,11 @@ use namada_sdk::signing::to_ledger_vector;
 use namada_sdk::tx::TX_BOND_WASM;
 use namada_sdk::tx::TX_TRANSFER_WASM;
 use namada_sdk::tx::{
-    TX_CHANGE_COMMISSION_WASM, TX_CHANGE_CONSENSUS_KEY_WASM, TX_CHANGE_METADATA_WASM,
-    TX_CLAIM_REWARDS_WASM, TX_DEACTIVATE_VALIDATOR_WASM, TX_INIT_ACCOUNT_WASM, TX_INIT_PROPOSAL,
-    TX_INIT_VALIDATOR_WASM, TX_REACTIVATE_VALIDATOR_WASM, TX_REVEAL_PK, TX_UNBOND_WASM,
-    TX_UNJAIL_VALIDATOR_WASM, TX_UPDATE_ACCOUNT_WASM, TX_VOTE_PROPOSAL, TX_WITHDRAW_WASM,
+    TX_BRIDGE_POOL_WASM, TX_CHANGE_COMMISSION_WASM, TX_CHANGE_CONSENSUS_KEY_WASM,
+    TX_CHANGE_METADATA_WASM, TX_CLAIM_REWARDS_WASM, TX_DEACTIVATE_VALIDATOR_WASM,
+    TX_INIT_ACCOUNT_WASM, TX_INIT_PROPOSAL, TX_INIT_VALIDATOR_WASM, TX_REACTIVATE_VALIDATOR_WASM,
+    TX_REDELEGATE_WASM, TX_RESIGN_STEWARD, TX_REVEAL_PK, TX_UNBOND_WASM, TX_UNJAIL_VALIDATOR_WASM,
+    TX_UPDATE_ACCOUNT_WASM, TX_UPDATE_STEWARD_COMMISSION, TX_VOTE_PROPOSAL, TX_WITHDRAW_WASM,
 };
 use namada_sdk::wallet::fs::FsWalletUtils;
 use proptest::collection;
@@ -44,6 +51,7 @@ use proptest::test_runner::TestRunner;
 use std::path::PathBuf;
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 // To facilitate propagating debugging information
 pub enum TxData {
     CommissionChange(CommissionChange),
@@ -63,6 +71,10 @@ pub enum TxData {
     Withdraw(Withdraw),
     Transfer(Transfer),
     Bond(Bond),
+    Redelegation(Redelegation),
+    UpdateStewardCommission(UpdateStewardCommission),
+    ResignSteward(Address),
+    PendingTransfer(PendingTransfer),
     Custom(Box<dyn std::fmt::Debug>),
 }
 
@@ -377,6 +389,103 @@ prop_compose! {
             website,
             discord_handle,
             validator_vp_code_hash,
+        }
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary redelegation
+    pub fn arb_redelegation()(
+        src_validator in arb_address(),
+        dest_validator in arb_address(),
+        owner in arb_address(),
+        amount in arb_amount(),
+    ) -> Redelegation {
+        Redelegation {
+            src_validator,
+            dest_validator,
+            owner,
+            amount,
+        }
+    }
+}
+
+prop_compose! {
+    // Generate an arbitraary steward commission update
+    pub fn arb_update_steward_commission()(
+        steward in arb_address(),
+        commission in collection::hash_map(arb_address(), arb_dec(), 0..10),
+    ) -> UpdateStewardCommission {
+        UpdateStewardCommission {
+            steward,
+            commission,
+        }
+    }
+}
+
+prop_compose! {
+    // Generate the kind of a transfer to ethereum
+    pub fn arb_transfer_to_ethereum_kind()(
+        discriminant in 0..2,
+    ) -> TransferToEthereumKind {
+        match discriminant {
+            0 => TransferToEthereumKind::Erc20,
+            1 => TransferToEthereumKind::Nut,
+            _ => unreachable!(),
+        }
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary Ethereum address
+    pub fn arb_eth_address()(bytes: [u8; 20]) -> EthAddress {
+        EthAddress(bytes)
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary transfer to Ethereum
+    pub fn arb_transfer_to_ethereum()(
+        kind in arb_transfer_to_ethereum_kind(),
+        asset in arb_eth_address(),
+        recipient in arb_eth_address(),
+        sender in arb_address(),
+        amount in arb_amount(),
+    ) -> TransferToEthereum {
+        TransferToEthereum {
+            kind,
+            asset,
+            recipient,
+            sender,
+            amount,
+        }
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary Ethereum gas fee
+    pub fn arb_gas_fee()(
+        amount in arb_amount(),
+        payer in arb_address(),
+        token in arb_address(),
+    ) -> GasFee {
+        GasFee {
+            amount,
+            payer,
+            token,
+        }
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary pending transfer
+    pub fn arb_pending_transfer()(
+        transfer in arb_transfer_to_ethereum(),
+        gas_fee in arb_gas_fee(),
+    ) -> PendingTransfer {
+        PendingTransfer {
+            transfer,
+            gas_fee,
         }
     }
 }
@@ -824,6 +933,70 @@ prop_compose! {
     }
 }
 
+prop_compose! {
+    // Generate an arbitrary redelegation transaction
+    pub fn arb_redelegation_tx()(
+        mut header in arb_header(),
+        wrapper in arb_wrapper_tx(),
+        redelegation in arb_redelegation(),
+        code_hash in arb_hash(),
+    ) -> (Tx, TxData) {
+        header.tx_type = TxType::Wrapper(Box::new(wrapper));
+        let mut tx = Tx { header, sections: vec![] };
+        tx.add_data(redelegation.clone());
+        tx.add_code_from_hash(code_hash, Some(TX_REDELEGATE_WASM.to_owned()));
+        (tx, TxData::Redelegation(redelegation))
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary redelegation transaction
+    pub fn arb_update_steward_commission_tx()(
+        mut header in arb_header(),
+        wrapper in arb_wrapper_tx(),
+        update_steward_commission in arb_update_steward_commission(),
+        code_hash in arb_hash(),
+    ) -> (Tx, TxData) {
+        header.tx_type = TxType::Wrapper(Box::new(wrapper));
+        let mut tx = Tx { header, sections: vec![] };
+        tx.add_data(update_steward_commission.clone());
+        tx.add_code_from_hash(code_hash, Some(TX_UPDATE_STEWARD_COMMISSION.to_owned()));
+        (tx, TxData::UpdateStewardCommission(update_steward_commission))
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary redelegation transaction
+    pub fn arb_resign_steward_tx()(
+        mut header in arb_header(),
+        wrapper in arb_wrapper_tx(),
+        steward in arb_address(),
+        code_hash in arb_hash(),
+    ) -> (Tx, TxData) {
+        header.tx_type = TxType::Wrapper(Box::new(wrapper));
+        let mut tx = Tx { header, sections: vec![] };
+        tx.add_data(steward.clone());
+        tx.add_code_from_hash(code_hash, Some(TX_RESIGN_STEWARD.to_owned()));
+        (tx, TxData::ResignSteward(steward))
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary pending transfer transaction
+    pub fn arb_pending_transfer_tx()(
+        mut header in arb_header(),
+        wrapper in arb_wrapper_tx(),
+        pending_transfer in arb_pending_transfer(),
+        code_hash in arb_hash(),
+    ) -> (Tx, TxData) {
+        header.tx_type = TxType::Wrapper(Box::new(wrapper));
+        let mut tx = Tx { header, sections: vec![] };
+        tx.add_data(pending_transfer.clone());
+        tx.add_code_from_hash(code_hash, Some(TX_BRIDGE_POOL_WASM.to_owned()));
+        (tx, TxData::PendingTransfer(pending_transfer))
+    }
+}
+
 // Generate an arbitrary tx
 pub fn arb_tx() -> impl Strategy<Value = (Tx, TxData)> {
     arb_transfer_tx()
@@ -844,6 +1017,10 @@ pub fn arb_tx() -> impl Strategy<Value = (Tx, TxData)> {
         .or(arb_deactivate_validator_tx().boxed())
         .or(arb_reactivate_validator_tx().boxed())
         .or(arb_consensus_key_change_tx().boxed())
+        .or(arb_redelegation_tx().boxed())
+        .or(arb_update_steward_commission_tx().boxed())
+        .or(arb_resign_steward_tx().boxed())
+        .or(arb_pending_transfer_tx().boxed())
 }
 
 #[tokio::main]
