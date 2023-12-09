@@ -1,5 +1,21 @@
 use chrono::DateTime;
 use chrono::Utc;
+use ibc::applications::transfer::msgs::transfer::MsgTransfer;
+use ibc::applications::transfer::packet::PacketData;
+use ibc::applications::transfer::Amount;
+use ibc::applications::transfer::BaseDenom;
+use ibc::applications::transfer::Memo;
+use ibc::applications::transfer::PrefixedCoin;
+use ibc::applications::transfer::PrefixedDenom;
+use ibc::applications::transfer::TracePath;
+use ibc::applications::transfer::TracePrefix;
+use ibc::core::ics04_channel::timeout::TimeoutHeight;
+use ibc::core::ics24_host::identifier::{ChannelId, PortId};
+use ibc::core::timestamp::Timestamp;
+use ibc::core::Msg;
+use ibc::proto::Any;
+use ibc::Height;
+use ibc::Signer;
 use namada_sdk::core::ledger::governance::storage::proposal::{
     AddRemove, PGFAction, PGFTarget, ProposalType,
 };
@@ -35,7 +51,7 @@ use namada_sdk::tx::TX_BOND_WASM;
 use namada_sdk::tx::TX_TRANSFER_WASM;
 use namada_sdk::tx::{
     TX_BRIDGE_POOL_WASM, TX_CHANGE_COMMISSION_WASM, TX_CHANGE_CONSENSUS_KEY_WASM,
-    TX_CHANGE_METADATA_WASM, TX_CLAIM_REWARDS_WASM, TX_DEACTIVATE_VALIDATOR_WASM,
+    TX_CHANGE_METADATA_WASM, TX_CLAIM_REWARDS_WASM, TX_DEACTIVATE_VALIDATOR_WASM, TX_IBC_WASM,
     TX_INIT_ACCOUNT_WASM, TX_INIT_PROPOSAL, TX_INIT_VALIDATOR_WASM, TX_REACTIVATE_VALIDATOR_WASM,
     TX_REDELEGATE_WASM, TX_RESIGN_STEWARD, TX_REVEAL_PK, TX_UNBOND_WASM, TX_UNJAIL_VALIDATOR_WASM,
     TX_UPDATE_ACCOUNT_WASM, TX_UPDATE_STEWARD_COMMISSION, TX_VOTE_PROPOSAL, TX_WITHDRAW_WASM,
@@ -48,7 +64,9 @@ use proptest::prop_compose;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::Reason;
 use proptest::test_runner::TestRunner;
+use prost::Message;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
@@ -75,6 +93,7 @@ pub enum TxData {
     UpdateStewardCommission(UpdateStewardCommission),
     ResignSteward(Address),
     PendingTransfer(PendingTransfer),
+    IbcAny(Any),
     Custom(Box<dyn std::fmt::Debug>),
 }
 
@@ -487,6 +506,160 @@ prop_compose! {
             transfer,
             gas_fee,
         }
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary port ID
+    pub fn arb_ibc_port_id()(id in "[a-zA-Z0-9_+.\\-\\[\\]#<>]{2,128}") -> PortId {
+        PortId::new(id).expect("generated invalid port ID")
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary channel ID
+    pub fn arb_ibc_channel_id()(id: u64) -> ChannelId {
+        ChannelId::new(id)
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC height
+    pub fn arb_ibc_height()(
+        revision_number: u64,
+        revision_height in 1u64..,
+    ) -> Height {
+        Height::new(revision_number, revision_height)
+            .expect("generated invalid IBC height")
+    }
+}
+
+// Generate arbitrary timeout data
+pub fn arb_ibc_timeout_data() -> impl Strategy<Value = TimeoutHeight> {
+    arb_ibc_height()
+        .prop_map(TimeoutHeight::At)
+        .boxed()
+        .prop_union(Just(TimeoutHeight::Never).boxed())
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC timestamp
+    pub fn arb_ibc_timestamp()(nanoseconds: u64) -> Timestamp {
+        Timestamp::from_nanoseconds(nanoseconds).expect("generated invalid IBC timestamp")
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC memo
+    pub fn arb_ibc_memo()(memo in "[a-zA-Z0-9_]*") -> Memo {
+        memo.into()
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC memo
+    pub fn arb_ibc_signer()(signer in "[a-zA-Z0-9_]*") -> Signer {
+        signer.into()
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC trace prefix
+    pub fn arb_ibc_trace_prefix()(
+        port_id in arb_ibc_port_id(),
+        channel_id in arb_ibc_channel_id(),
+    ) -> TracePrefix {
+        TracePrefix::new(port_id, channel_id)
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC trace path
+    pub fn arb_ibc_trace_path()(path in collection::vec(arb_ibc_trace_prefix(), 0..10)) -> TracePath {
+        TracePath::from(path)
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC base denomination
+    pub fn arb_ibc_base_denom()(base_denom in "[a-zA-Z0-9_]+") -> BaseDenom {
+        BaseDenom::from_str(&base_denom).expect("generated invalid IBC base denomination")
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC prefixed denomination
+    pub fn arb_ibc_prefixed_denom()(
+        trace_path in arb_ibc_trace_path(),
+        base_denom in arb_ibc_base_denom(),
+    ) -> PrefixedDenom {
+        PrefixedDenom {
+            trace_path,
+            base_denom,
+        }
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC amount
+    pub fn arb_ibc_amount()(value: [u64; 4]) -> Amount {
+        value.into()
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary prefixed coin
+    pub fn arb_ibc_prefixed_coin()(
+        denom in arb_ibc_prefixed_denom(),
+        amount in arb_ibc_amount(),
+    ) -> PrefixedCoin {
+        PrefixedCoin {
+            denom,
+            amount,
+        }
+    }
+}
+
+prop_compose! {
+    // Generate arbitrary packet data
+    pub fn arb_ibc_packet_data()(
+        token in arb_ibc_prefixed_coin(),
+        sender in arb_ibc_signer(),
+        receiver in arb_ibc_signer(),
+        memo in arb_ibc_memo(),
+    ) -> PacketData {
+        PacketData {
+            token,
+            sender,
+            receiver,
+            memo,
+        }
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC transfer message
+    pub fn arb_ibc_msg_transfer()(
+        port_id_on_a in arb_ibc_port_id(),
+        chan_id_on_a in arb_ibc_channel_id(),
+        packet_data in arb_ibc_packet_data(),
+        timeout_height_on_b in arb_ibc_timeout_data(),
+        timeout_timestamp_on_b in arb_ibc_timestamp(),
+    ) -> MsgTransfer {
+        MsgTransfer {
+            port_id_on_a,
+            chan_id_on_a,
+            packet_data,
+            timeout_height_on_b,
+            timeout_timestamp_on_b,
+        }
+    }
+}
+
+prop_compose! {
+    // Generate an arbitrary IBC any object
+    pub fn arb_ibc_any()(msg_transfer in arb_ibc_msg_transfer()) -> Any {
+        msg_transfer.to_any()
     }
 }
 
@@ -997,6 +1170,24 @@ prop_compose! {
     }
 }
 
+prop_compose! {
+    // Generate an arbitrary IBC any transaction
+    pub fn arb_ibc_any_tx()(
+        mut header in arb_header(),
+        wrapper in arb_wrapper_tx(),
+        ibc_any in arb_ibc_any(),
+        code_hash in arb_hash(),
+    ) -> (Tx, TxData) {
+        header.tx_type = TxType::Wrapper(Box::new(wrapper));
+        let mut tx = Tx { header, sections: vec![] };
+        let mut tx_data = vec![];
+        ibc_any.encode(&mut tx_data).expect("unable to encode IBC data");
+        tx.add_serialized_data(tx_data);
+        tx.add_code_from_hash(code_hash, Some(TX_IBC_WASM.to_owned()));
+        (tx, TxData::IbcAny(ibc_any))
+    }
+}
+
 // Generate an arbitrary tx
 pub fn arb_tx() -> impl Strategy<Value = (Tx, TxData)> {
     arb_transfer_tx()
@@ -1021,6 +1212,7 @@ pub fn arb_tx() -> impl Strategy<Value = (Tx, TxData)> {
         .or(arb_update_steward_commission_tx().boxed())
         .or(arb_resign_steward_tx().boxed())
         .or(arb_pending_transfer_tx().boxed())
+        .or(arb_ibc_any_tx().boxed())
 }
 
 #[tokio::main]
